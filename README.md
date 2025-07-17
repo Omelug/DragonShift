@@ -24,6 +24,16 @@ This script has primarily been tested in lab environments, specifically on the f
   - airmon-ng
 - hostapd-mana
 
+# Installation
+For install dependencies with apt 
+```
+make  install_deps 
+```
+For creating python3 venv and install  python dependencies
+```
+make install 
+```
+
 # Usage
 For optimal use of DragonShift, it is **highly recommended to have two Wi-Fi interfaces** :
 - One dedicated to scanning and performing deauthentication attacks if an AP is vulnerable.
@@ -488,12 +498,3 @@ See [Single interface - Multiple APs](#single-interface---multiple-aps) and [Sin
 [-] Attack failed with return code : None
 ```
 
-# Installation
-For install dependencies with apt 
-```
-make  install_deps 
-```
-For creating python3 venv and install  python dependencies
-```
-make install 
-```
